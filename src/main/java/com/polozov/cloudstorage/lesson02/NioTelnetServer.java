@@ -16,8 +16,14 @@ import java.util.Map;
 import java.util.Set;
 
 public class NioTelnetServer {
-    private static final String LS_COMMAND = "\tls     view all files from current directory";
-    private static final String MKDIR_COMMAND = "\tmkdir  view all files from current directory";
+    private static final String LS_COMMAND = "\tls         view all files from current directory";
+    private static final String TOUCH_COMMAND = "\ttouch      create new file";
+    private static final String MKDIR_COMMAND = "\tmkdir      create new directory";
+    private static final String CD_COMMAND = "\tcd         (path | ~ | ..) change current directory to path, to root or one level up";
+    private static final String RM_COMMAND = "\trm         (filename / dirname) remove file / directory";
+    private static final String COPY_COMMAND = "\tcopy       (src) (target) copy file or directory from src path to target path";
+    private static final String CAT_COMMAND = "\tcat        (filename) view text file";
+    private static final String CHANGENICK_COMMAND = "\tchangenick (nickname) change user's nickname"
 
     private final ByteBuffer buffer = ByteBuffer.allocate(512);
 
