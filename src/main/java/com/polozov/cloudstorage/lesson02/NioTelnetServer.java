@@ -11,6 +11,7 @@ import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 
 public class NioTelnetServer {
@@ -26,14 +27,14 @@ public class NioTelnetServer {
     };
     
     private final ByteBuffer buffer = ByteBuffer.allocate(512);
-
+    
     private static int userNumber;
     private Map<SocketAddress, String> clients = new HashMap<>();
     private Map<SocketAddress, String> currentPaths = new HashMap<>();
     private Map<SocketAddress, Path> roots = new HashMap<>();
     
     private final String ABSOLUTE_SERVER_PATH;
-
+    
     public NioTelnetServer() throws Exception {
         userNumber = 0;
         ABSOLUTE_SERVER_PATH = Paths.get("server").toAbsolutePath().toString();
@@ -41,7 +42,7 @@ public class NioTelnetServer {
         server.bind(new InetSocketAddress(5679));
         server.configureBlocking(false);
         Selector selector = Selector.open();
-
+        
         server.register(selector, SelectionKey.OP_ACCEPT);
         System.out.println("Server started");
         while (server.isOpen()) {
@@ -59,13 +60,13 @@ public class NioTelnetServer {
             }
         }
     }
-
+    
     private void handleAccept(SelectionKey key, Selector selector) throws IOException {
         SocketChannel channel = ((ServerSocketChannel) key.channel()).accept();
         channel.configureBlocking(false);
         System.out.println("Client connected. IP:" + channel.getRemoteAddress());
         channel.register(selector, SelectionKey.OP_READ, "att");
-    
+        
         // Проверяем, существует ли пользователь.
         // Сохраняем нового пользователя в Map
         String userName;
@@ -88,14 +89,14 @@ public class NioTelnetServer {
         String currentPath = currentPaths.get(client);
         String userName = clients.get(client);
         int readBytes = channel.read(buffer);
-
+    
         if (readBytes < 0) {
             channel.close();
             return;
-        } else  if (readBytes == 0) {
+        } else if (readBytes == 0) {
             return;
         }
-
+    
         buffer.flip();
         StringBuilder sb = new StringBuilder();
         while (buffer.hasRemaining()) {
@@ -104,18 +105,13 @@ public class NioTelnetServer {
         buffer.clear();
     
         // TODO: 21.06.2021
-        // mkdir (dirname) - создание директории
-        // cd (path | ~ | ..) - изменение текущего положения
-        // rm (filename / dirname) - удаление файла / директории
+
         // copy (src) (target) - копирование файлов / директории
         // cat (filename) - вывод содержимого текстового файла
         // changenick (nickname) - изменение имени пользователя
-
-        // 1. Создать переменные комманд - выполнено
-        // 2. Создать методы обработки комманд -
         
         // добавить имя клиента
-
+    
         if (key.isValid()) {
             String command = sb.toString()
                 .replace("\r", "")
@@ -132,8 +128,8 @@ public class NioTelnetServer {
                 sendMessage(makeDirectory(command, currentPath, client).concat("\n\r"), selector, client);
             } else if (command.startsWith("cd")) {
                 sendMessage(changeDirectory(command, currentPath, client).concat("\n\r"), selector, client);
-//                } else if (command.startsWith("rm", currentPath)) {
-//
+            } else if (command.startsWith("rm")) {
+                sendMessage(remove(command, currentPath, client).concat("\n\r"), selector, client);
 //                } else if (command.startsWith("copy")) {
 //
 //                } else if (command.startsWith("cat", currentPath)) {
@@ -141,15 +137,83 @@ public class NioTelnetServer {
 //                } else if (command.startsWith("changenick")) {
 //
             }
-            String startOfLine = userName + ": " + currentPaths.get(client) + "> ";
-            sendMessage(startOfLine, selector, client);
         }
+        String startOfLine = userName + ": " + currentPaths.get(client) + "> ";
+        sendMessage(startOfLine, selector, client);
+    }
+    
+    private String remove(String command, String currentPath, SocketAddress client) {
+        String msg = "";
+        String[] arguments = command.split(" ", 2);
+        if (arguments.length < 2) {
+            return msg;
+        }
+        String path = arguments[1].trim();
+        if ("".equals(path)) {
+            return msg;
+        }
+        String root = roots.get(client).toString();
+        String absoluteRoot = ABSOLUTE_SERVER_PATH + File.separator + root;
+    
+        try {
+            // Если path находится в ветке данного пользователя
+            if (Path.of("server", currentPath, path).toAbsolutePath().normalize().startsWith(Path.of(absoluteRoot))) {
+                // Если path представляет путь относительно текущей директории и существует
+                if (Files.exists(Path.of("server", currentPath, path))) {
+                    // Изменяем текущую директорию на currentPath/path
+                    currentPath = Path.of(currentPath, path).toString();
+                // Если path представляет полный путь относительно директории server и существует
+                } else if (Files.exists(Path.of("server", path))) {
+                    // Изменяем текущую директорию на path
+                    currentPath = path;
+                }
+            } else {
+                return "Path not found";
+            }
+            // Если path указывает на директорию и она не является корневой
+            if (Files.isDirectory(Path.of("server", currentPath)) && !root.equals(currentPath)) {
+                // Проходимся по всем вложенным директориям и удаляем все вложенные файлы и директории
+                Files.walkFileTree(Path.of("server", currentPath), new FileVisitor<Path>() {
+                    @Override
+                    public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                        Files.delete(file);
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                        Files.delete(dir);
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
+                // Изменяем текущую директорию на родительскую
+                currentPaths.replace(client, Path.of(currentPath).getParent().toString());
+                return Files.exists(Path.of(currentPath)) ? "Something wrong" : "Directory deleted";
+            } else {
+                // Если path указывает на файл то удаляем его
+                Files.delete(Path.of("server", currentPath));
+                currentPaths.replace(client, Path.of(currentPath).getParent().toString());
+                return Files.exists(Path.of(currentPath)) ? "Delete filed" : "File deleted";
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return "";
     }
     
     // изменение текущей директории
     private String changeDirectory(String command, String currentPath, SocketAddress client) {
         String msg = "";
-        // cd (path | ~ | .. ) - изменение текущего положения
         String[] arguments = command.split(" ", 2);
         if (arguments.length < 2) {
             return msg;
@@ -195,7 +259,6 @@ public class NioTelnetServer {
         Path path = Paths.get("server", currentPath, arguments[1]);
         try {
             if (path.normalize().toAbsolutePath().startsWith(ABSOLUTE_SERVER_PATH + File.separator + roots.get(client))) {
-//                currentPath = arguments[1];
                 if (!Files.exists(path)) {
                     Files.createFile(path);
                     return "File " + arguments[1] + " created\n\r";
@@ -203,9 +266,6 @@ public class NioTelnetServer {
                     return "File already exists!\n\r";
                 }
             }
-//            if (path.normalize().toAbsolutePath().toString().startsWith("server" + File.separator)) {
-//                currentPath = arguments[1];
-//            }
         } catch (IOException e) {
             e.printStackTrace();
             return "Wrong path!";
@@ -216,18 +276,20 @@ public class NioTelnetServer {
     // создание директории
     private String makeDirectory(String command, String currentPath, SocketAddress client) {
         String[] arguments = command.split(" ", 2);
-        Path path = Paths.get("server", currentPath, arguments[1]);
+        String pathArg = arguments[1].trim();
+        Path path = Paths.get("server", currentPath, pathArg);
         try {
-            if (path.normalize().toAbsolutePath().startsWith(ABSOLUTE_SERVER_PATH + File.separator + roots.get(client))) {
-                if (currentPath.equals("server")) {
-                    path = Paths.get(currentPath, arguments[1]);
-                    if (Files.exists(path)) {
-                        return "";
-                    }
-                }
+            if ("server".equals(currentPath)) {
+                path = Paths.get(currentPath, pathArg);
                 if (!Files.exists(path)) {
                     Files.createDirectory(path);
-                    return "Directory " + arguments[1] + " created\n\r";
+                    return "";
+                }
+            }
+            if (path.normalize().toAbsolutePath().startsWith(ABSOLUTE_SERVER_PATH + File.separator + roots.get(client))) {
+                if (!Files.exists(path)) {
+                    Files.createDirectory(path);
+                    return "Directory " + pathArg + " created\n\r";
                 } else {
                     return "Directory already exists!\n\r";
                 }
@@ -236,11 +298,10 @@ public class NioTelnetServer {
             e.printStackTrace();
             return "\n\r";
         }
-//        return "Directory " + path + " created\n\r";
         return "\n\r";
     }
     
-    // Получаем список файлов и папк в текущей директории
+    // Получение списка файлов и папок в текущей директории
     private String getFilesList(String currentPath) {
         String[] servers = new File("server" + File.separator + currentPath).list();
         if (!(servers == null) && servers.length > 0) {
